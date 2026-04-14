@@ -9,7 +9,7 @@ import os
 class ProteomicsDiscoveryPipeline:
     def __init__(self, file_path, config):
         print(f"Loading data from {file_path}...")
-        self.df = pd.read_csv(file_path)
+        self.df = pd.read_csv(file_path, sep='\t')
         self.config = config
         self.results = {}
 
@@ -33,27 +33,40 @@ class ProteomicsDiscoveryPipeline:
             for col in matched_cols:
                 self.df[col] = pd.to_numeric(self.df[col], errors='coerce')
 
-    def impute_and_normalize(self):
-        print("Normalizing and Imputing missing values to 0.1...")
+def impute_and_normalize(self):
+        print("\n" + "="*50)
+        print(" PHASE 1: DATA PRE-PROCESSING")
+        print("="*50)
+        print(f"[*] Normalizing and Imputing missing values...")
+        
         all_quant_cols = [col for cols in self.group_cols.values() for col in cols]
         
-        # 1. Median Centering (Calculate medians ignoring NaNs to get accurate scaling)
+        # Median Centering
         sample_medians = self.df[all_quant_cols].median()
         global_median = sample_medians.median()
         
         for col in all_quant_cols:
             self.df[col] = self.df[col] * (global_median / sample_medians[col])
 
-        # 2. Aggressive Imputation (Rescue False Negatives)
-        # Replace all remaining NaNs with 0.1 so no data is dropped
+        # Aggressive Imputation
         self.df[all_quant_cols] = self.df[all_quant_cols].fillna(0.1)
-
-        # 3. Log2 Transformation
         self.df[all_quant_cols] = np.log2(self.df[all_quant_cols] + 1)
+        
+        print(f"[OK] Normalization complete. Base-line floor set to 0.1.")
 
     def run_statistics(self):
+        print("\n" + "="*50)
+        print(" PHASE 2: STATISTICAL TIERING")
+        print("="*50)
+        
+        # Silence the "catastrophic cancellation" warning so it doesn't clutter the view
+        import warnings
+        warnings.filterwarnings('ignore', category=RuntimeWarning)
+
         for test_group, control_group in self.config['comparisons']:
-            print(f"Running statistics for {test_group} vs {control_group}...")
+            comp_label = f"{test_group} vs {control_group}"
+            print(f"\n▶ ANALYZING: {comp_label}")
+            print("-" * 30)
             
             cols_test = self.group_cols[test_group]
             cols_ctrl = self.group_cols[control_group]
@@ -62,48 +75,48 @@ class ProteomicsDiscoveryPipeline:
             p_values_raw = []
             log2_fcs = []
 
-            # Perform Welch's T-Test
             for index, row in comp_df.iterrows():
                 val_test = row[cols_test].values.astype(float)
                 val_ctrl = row[cols_ctrl].values.astype(float)
-
-                # Because of imputation, there are no NaNs, so variance won't crash
-                # Add a tiny try/except block just in case standard deviation is perfectly 0
                 try:
                     t_stat, p_val = stats.ttest_ind(val_test, val_ctrl, equal_var=False)
                     lfc = np.mean(val_test) - np.mean(val_ctrl)
                 except:
-                    p_val = np.nan
-                    lfc = np.nan
+                    p_val, lfc = np.nan, np.nan
                 
                 p_values_raw.append(p_val)
                 log2_fcs.append(lfc)
 
             comp_df['Log2FC'] = log2_fcs
             comp_df['Raw_P_Value'] = p_values_raw
-
-            # Drop math errors (if any) before FDR
             comp_df = comp_df.dropna(subset=['Raw_P_Value', 'Log2FC'])
 
-            # Apply FDR correction
+            # FDR
             reject, pvals_corrected, _, _ = multipletests(comp_df['Raw_P_Value'], alpha=self.config['p_value_threshold'], method='fdr_bh')
             comp_df['FDR_Adjusted_P'] = pvals_corrected
             
-            # Create Tiered Flags
+            # Tiering
             pass_raw = (comp_df['Raw_P_Value'] < self.config['p_value_threshold']) & (comp_df['Log2FC'].abs() > self.config['log2fc_threshold'])
             pass_fdr = (comp_df['FDR_Adjusted_P'] < self.config['p_value_threshold']) & (comp_df['Log2FC'].abs() > self.config['log2fc_threshold'])
             
             comp_df['Passed_Raw_Threshold'] = pass_raw
             comp_df['Passed_FDR_Threshold'] = pass_fdr
 
-            # Assign categories for the plot
             conditions = [pass_fdr, pass_raw & ~pass_fdr]
             choices = ['High Confidence (FDR < 0.05)', 'Exploratory (Raw P < 0.05)']
             comp_df['Significance_Tier'] = np.select(conditions, choices, default='Not Significant')
 
             self.results[f"{test_group}_vs_{control_group}"] = comp_df
-            print(f"  -> {pass_fdr.sum()} High Confidence Hits | {(pass_raw & ~pass_fdr).sum()} Exploratory Hits")
+            
+            # THE ORGANIZED OUTPUT TABLE
+            print(f"  Tier 1 (High Confidence):   {pass_fdr.sum():>4} proteins")
+            print(f"  Tier 2 (Exploratory):       {(pass_raw & ~pass_fdr).sum():>4} proteins")
+            print(f"  [√] Comparison Successful")
 
+        print("\n" + "="*50)
+        print(" PHASE 3: EXPORTING VISUALS")
+        print("="*50)
+        
     def export_and_plot(self):
         if not os.path.exists("Output"):
             os.makedirs("Output")
@@ -174,7 +187,7 @@ if __name__ == "__main__":
     }
 
     # Run the Pipeline
-    pipeline = ProteomicsDiscoveryPipeline('BioLab_Report_for_Excel.csv', experiment_config)
+    pipeline = ProteomicsDiscoveryPipeline('20260313_093105_Omar_AKAP11_ServiceAward_DIA_TT_20250701_Report_pivot for Bella (1).csv', experiment_config)
     pipeline.clean_and_format()
     pipeline.impute_and_normalize()
     pipeline.run_statistics()
