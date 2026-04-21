@@ -45,6 +45,6 @@ Use these for hypothesis generation and "rescuing" lower-abundance proteins.
 The Volcano Plot (.png)
 
 A visual map of your data:
-🔴 Red Dots: High Confidence hits ($P < 0.05$, $Fold Change > 2$).
-🔵 Blue Dots: Exploratory hits ($P < 0.05$).
+🔴 Red Dots: High Confidence hits (P < 0.05, Fold Change > 2).
+🔵 Blue Dots: Exploratory hits (P < 0.05).
 🔘 Grey Dots: Non-significant background.
