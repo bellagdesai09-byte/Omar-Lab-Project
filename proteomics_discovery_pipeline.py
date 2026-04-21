@@ -6,11 +6,12 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import os
 import warnings
+from adjustText import adjust_text
+import plotly.express as px
 
 class ProteomicsDiscoveryPipeline:
     def __init__(self, file_path, config):
         print(f"Loading data from {file_path}...")
-        # Use sep='\t' because your file is actually Tab-Separated
         self.df = pd.read_csv(file_path, sep='\t')
         self.config = config
         self.results = {}
@@ -103,29 +104,74 @@ class ProteomicsDiscoveryPipeline:
 
     def export_and_plot(self):
         print("\n" + "="*50)
-        print(" PHASE 3: EXPORTING VISUALS")
+        print(" PHASE 3: EXPORTING VISUALS (PNG & HTML)")
         print("="*50)
         if not os.path.exists("Output"):
             os.makedirs("Output")
 
         for comp_name, df_res in self.results.items():
+            print(f"  [+] Processing: {comp_name}...")
+            
+            # --- 1. EXPORT CSV ---
             output_file = f"Output/{comp_name}_Results.csv"
             export_cols = ['PG.ProteinGroups', 'PG.Genes', 'Log2FC', 'Raw_P_Value', 'FDR_Adjusted_P', 'Passed_Raw_Threshold', 'Passed_FDR_Threshold', 'Significance_Tier']
             df_res[export_cols].to_csv(output_file, index=False)
             
-            plt.figure(figsize=(10, 6))
             df_res['neg_log_raw_p'] = -np.log10(df_res['Raw_P_Value'])
             palette = {'High Confidence (FDR < 0.05)': 'red', 'Exploratory (Raw P < 0.05)': 'royalblue', 'Not Significant': 'lightgrey'}
 
+            # --- 2. EXPORT STATIC PNG (WITH LABELS) ---
+            plt.figure(figsize=(10, 6))
             sns.scatterplot(data=df_res, x='Log2FC', y='neg_log_raw_p', hue='Significance_Tier', palette=palette, alpha=0.7, edgecolor=None)
+            
             plt.axhline(-np.log10(self.config['p_value_threshold']), color='black', linestyle='--', linewidth=1)
             plt.axvline(self.config['log2fc_threshold'], color='black', linestyle=':', linewidth=1)
             plt.axvline(-self.config['log2fc_threshold'], color='black', linestyle=':', linewidth=1)
+            
+            texts = []
+            high_conf = df_res[df_res['Significance_Tier'] == 'High Confidence (FDR < 0.05)']
+            top_hits = high_conf.nsmallest(15, 'FDR_Adjusted_P')
+            
+            for i, row in top_hits.iterrows():
+                gene = str(row['PG.Genes'])
+                if gene != 'nan' and gene != 'None':
+                    texts.append(plt.text(row['Log2FC'], row['neg_log_raw_p'], gene, fontsize=9, fontweight='bold'))
+            
+            if texts:
+                adjust_text(texts, arrowprops=dict(arrowstyle='-', color='black', lw=0.5))
+
             plt.title(f'Discovery Volcano Plot: {comp_name}')
             plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
             plt.savefig(f"Output/{comp_name}_Volcano.png", dpi=300, bbox_inches='tight')
             plt.close()
-        print("[OK] All plots saved to 'Output' folder.\n")
+
+            # --- 3. EXPORT INTERACTIVE HTML ---
+            fig = px.scatter(
+                df_res,
+                x='Log2FC',
+                y='neg_log_raw_p',
+                color='Significance_Tier',
+                hover_name='PG.Genes', 
+                hover_data={
+                    'Log2FC': ':.2f',
+                    'Raw_P_Value': ':.4f',
+                    'FDR_Adjusted_P': ':.4f',
+                    'Significance_Tier': False, 
+                    'neg_log_raw_p': False
+                },
+                color_discrete_map=palette,
+                title=f'Interactive Volcano: {comp_name}',
+                width=1000, height=700
+            )
+
+            fig.add_hline(y=-np.log10(self.config['p_value_threshold']), line_dash="dash", line_color="black", opacity=0.5)
+            fig.add_vline(x=self.config['log2fc_threshold'], line_dash="dot", line_color="black", opacity=0.5)
+            fig.add_vline(x=-self.config['log2fc_threshold'], line_dash="dot", line_color="black", opacity=0.5)
+
+            html_file = f"Output/{comp_name}_Interactive_Volcano.html"
+            fig.write_html(html_file)
+            
+        print("[OK] All CSVs, PNGs, and HTML plots saved to 'Output' folder.\n")
 
 if __name__ == "__main__":
     experiment_config = {
@@ -139,7 +185,6 @@ if __name__ == "__main__":
         'log2fc_threshold': 1.0       
     }
 
-    # UPDATE FILE NAME HERE
     data_file = '20260313_093105_Omar_AKAP11_ServiceAward_DIA_TT_20250701_Report_pivot for Bella (1).csv'
     
     pipeline = ProteomicsDiscoveryPipeline(data_file, experiment_config)
