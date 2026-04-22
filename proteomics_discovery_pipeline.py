@@ -199,31 +199,31 @@ if __name__ == "__main__":
 #     # Toggle between your project and the colleague's data by commenting/uncommenting
     
 #     # --- OPTION A: Colleague's Alpha/Beta Data ---
-#     experiment_config = {
-#         'group_mapping': {
-#             'Alpha': ['alpha_'], 
-#             'Beta':  ['beta_'],
-#             'QC':    ['QC_']    
-#         },
-#         'comparisons': [('Alpha', 'Beta')],
-#         'p_value_threshold': 0.05,    
-#         'log2fc_threshold': 1.0       
-#     }
-#     data_file = 'Translated_Alpha_Beta_Data.csv'
-
-# --- OPTION B: Original AKAP11 Data ---
     experiment_config = {
         'group_mapping': {
-            'Treatment_C': ['HEX_C2', 'HEX_C3', 'HEX_C4', 'HEX_C5'],
-            'Treatment_N': ['HEX_N2', 'HEX_N3', 'HEX_N4', 'HEX_N5'],
-            'Baseline_Control': ['HEX_NES2', 'HEX_NES3', 'HEX_NES4', 'HEX_NES5']
+            'Alpha': ['alpha_'], 
+            'Beta':  ['beta_'],
+            'QC':    ['QC_']    
         },
-        'comparisons': [('Treatment_C', 'Baseline_Control'), ('Treatment_N', 'Baseline_Control')],
+        'comparisons': [('Alpha', 'Beta')],
         'p_value_threshold': 0.05,    
         'log2fc_threshold': 1.0       
     }
+    data_file = 'Translated_Alpha_Beta_Data.csv'
+
+# # --- OPTION B: Original AKAP11 Data ---
+#     experiment_config = {
+#         'group_mapping': {
+#             'Treatment_C': ['HEX_C2', 'HEX_C3', 'HEX_C4', 'HEX_C5'],
+#             'Treatment_N': ['HEX_N2', 'HEX_N3', 'HEX_N4', 'HEX_N5'],
+#             'Baseline_Control': ['HEX_NES2', 'HEX_NES3', 'HEX_NES4', 'HEX_NES5']
+#         },
+#         'comparisons': [('Treatment_C', 'Baseline_Control'), ('Treatment_N', 'Baseline_Control')],
+#         'p_value_threshold': 0.05,    
+#         'log2fc_threshold': 1.0       
+#     }
     
-    data_file = '20260313_093105_Omar_AKAP11_ServiceAward_DIA_TT_20250701_Report_pivot for Bella (1).csv'
+#     data_file = '20260313_093105_Omar_AKAP11_ServiceAward_DIA_TT_20250701_Report_pivot for Bella (1).csv'
     
     # These must be aligned with the experiment_config above!
     pipeline = ProteomicsDiscoveryPipeline(data_file, experiment_config)
