@@ -8,6 +8,7 @@ import os
 import warnings
 from adjustText import adjust_text
 import plotly.express as px
+from sklearn.decomposition import PCA
 
 class ProteomicsDiscoveryPipeline:
     def __init__(self, file_path, config):
@@ -65,7 +66,104 @@ class ProteomicsDiscoveryPipeline:
         self.df[all_quant_cols] = self.df[all_quant_cols].fillna(0.1)
         self.df[all_quant_cols] = np.log2(self.df[all_quant_cols] + 1)
         print(f"[OK] Normalization complete. Base-line floor set to 0.1.")
+        
+    def run_qc_checkpoint(self):
+        print("\n" + "="*50)
+        print(" PHASE 1.5: QUALITY CONTROL & PCA")
+        print("="*50)
 
+        all_quant_cols = [col for cols in self.group_cols.values() for col in cols]
+        
+        if len(all_quant_cols) < 3:
+            print("  [!] Not enough samples for PCA clustering. Skipping QC.")
+            return
+
+        print(">> Generating PCA plot. Please review the pop-up window.")
+        pca = PCA(n_components=2)
+        coords = pca.fit_transform(self.df[all_quant_cols].T)
+
+        fig, ax = plt.subplots(figsize=(9, 6), facecolor='#f0f0f0')
+        colors = plt.get_cmap('tab10')
+        color_map = {group: colors(i) for i, group in enumerate(self.group_cols.keys())}
+
+        scatter_objects = []
+        scatter_labels = []
+
+        for group_name, cols in self.group_cols.items():
+            indices = [all_quant_cols.index(c) for c in cols]
+            # picker=5 allows clicking near the dot, not just perfectly dead center
+            sc = ax.scatter(coords[indices, 0], coords[indices, 1], 
+                            label=group_name, s=150, alpha=0.8, color=color_map[group_name], edgecolor='black', picker=5)
+            scatter_objects.append(sc)
+            
+            clean_names = [all_quant_cols[idx].split('.PG')[0].replace('HEX_', '') for idx in indices]
+            scatter_labels.append(clean_names)
+
+        # zorder=100 forces the tooltip to the front layer
+        annot = ax.annotate("", xy=(0,0), xytext=(10, 10), textcoords="offset points",
+                            bbox=dict(boxstyle="round4,pad=0.5", fc="white", ec="black", lw=1, alpha=0.9),
+                            arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=0"), zorder=100)
+        annot.set_visible(False)
+
+        def on_pick(event):
+            for i, sc in enumerate(scatter_objects):
+                if event.artist == sc:
+                    idx = event.ind[0]
+                    clean_name = scatter_labels[i][idx]
+                        
+                    # Update visual pop-up
+                    pos = sc.get_offsets()[idx]
+                    annot.xy = pos
+                    annot.set_text(clean_name)
+                    annot.set_visible(True)
+                    fig.canvas.draw_idle()
+                        
+                    # Bulletproof Terminal Print
+                    print(f"  [CLICKED] Sample Identity: {clean_name}")
+                    break
+
+        def on_click_bg(event):
+            annot.set_visible(False)
+            fig.canvas.draw_idle()
+
+        fig.canvas.mpl_connect('pick_event', on_pick)
+        fig.canvas.mpl_connect('button_press_event', on_click_bg)
+
+        plt.title("QC Checkpoint: CLICK dots to identify samples. Close window to continue.", fontweight='bold', pad=15)
+        plt.xlabel("Principal Component 1")
+        plt.ylabel("Principal Component 2")
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.tight_layout()
+        
+        plt.show()
+
+        print("\nReview complete.")
+        outlier_input = input("Enter the EXACT names of any outlier samples to remove (comma separated) or press ENTER to keep all: ")
+
+        if outlier_input.strip():
+            # Clean up the input, ignoring empty spaces from trailing commas
+            outliers_to_remove = [x.strip().lower() for x in outlier_input.split(',') if x.strip()]
+            removed_count = 0
+
+            for group_name in self.group_cols:
+                surviving_cols = []
+                for col in self.group_cols[group_name]:
+                    
+                    # The smart token fix: padding with underscores prevents partial matches on plate IDs
+                    col_padded = f"_{col.lower()}_"
+                    
+                    if any(f"_{out}_" in col_padded for out in outliers_to_remove):
+                        print(f"  [-] Dropping outlier: {col}")
+                        removed_count += 1
+                    else:
+                        surviving_cols.append(col)
+                        
+                self.group_cols[group_name] = surviving_cols
+
+            print(f"  [+] Successfully purged {removed_count} outliers. Statistics will be calculated on the remaining samples.")
+        else:
+            print("  [+] No outliers removed. Proceeding with full dataset.")
+            
     def run_statistics(self):
         print("\n" + "="*50)
         print(" PHASE 2: STATISTICAL TIERING")
@@ -80,7 +178,7 @@ class ProteomicsDiscoveryPipeline:
             cols_ctrl = self.group_cols[control_group]
 
             if len(cols_test) < 2 or len(cols_ctrl) < 2:
-                print(f"  [!] ERROR: Not enough replicates to run T-Test for {comp_label}!")
+                print(f"  [!] ERROR: Not enough replicates surviving to run T-Test for {comp_label}! Skipping.")
                 continue
 
             comp_df = self.df.copy()
@@ -105,7 +203,6 @@ class ProteomicsDiscoveryPipeline:
             _, pvals_corrected, _, _ = multipletests(comp_df['Raw_P_Value'], alpha=self.config['p_value_threshold'], method='fdr_bh')
             comp_df['FDR_Adjusted_P'] = pvals_corrected
             
-            # --- UPDATED 3-TIER LOGIC ---
             pass_fdr = (comp_df['FDR_Adjusted_P'] < self.config['p_value_threshold']) & (comp_df['Log2FC'].abs() > self.config['log2fc_threshold'])
             pass_raw_fc = (comp_df['Raw_P_Value'] < self.config['p_value_threshold']) & (comp_df['Log2FC'].abs() > self.config['log2fc_threshold'])
             pass_raw_only = (comp_df['Raw_P_Value'] < self.config['p_value_threshold']) & (comp_df['Log2FC'].abs() <= self.config['log2fc_threshold'])
@@ -132,7 +229,6 @@ class ProteomicsDiscoveryPipeline:
             
             output_file = f"Output/{comp_name}_Results.csv"
             
-            # These are the columns we want at the very front of the CSV for the GUI
             priority_cols = [
                 'PG.ProteinGroups', 
                 'PG.Genes', 
@@ -145,14 +241,11 @@ class ProteomicsDiscoveryPipeline:
                 'Significance_Tier'
             ]
             
-            # Organize columns: priority first, then everything else
             stat_cols = [c for c in priority_cols if c in df_res.columns]
             other_cols = [c for c in df_res.columns if c not in stat_cols and c != 'neg_log_raw_p']
             
-            # Save the final Results CSV
             df_res[stat_cols + other_cols].to_csv(output_file, index=False)
             
-            # --- Visualization Math & Plots ---
             df_res['neg_log_raw_p'] = -np.log10(df_res['Raw_P_Value'])
             palette = {
                 'Tier 1: High Confidence (FDR)': 'red', 
@@ -161,7 +254,6 @@ class ProteomicsDiscoveryPipeline:
                 'Not Significant': 'lightgrey'
             }
 
-            # 1. Create Static PNG Volcano Plot
             plt.figure(figsize=(10, 6))
             sns.scatterplot(data=df_res, x='Log2FC', y='neg_log_raw_p', hue='Significance_Tier', palette=palette, alpha=0.7, edgecolor=None)
             plt.axhline(-np.log10(self.config['p_value_threshold']), color='black', linestyle='--', linewidth=1)
@@ -179,7 +271,6 @@ class ProteomicsDiscoveryPipeline:
             plt.savefig(f"Output/{comp_name}_Volcano.png", dpi=300, bbox_inches='tight')
             plt.close()
 
-            # 2. Create Interactive HTML Volcano Plot
             hover_dict = {'Log2FC': ':.2f', 'Raw_P_Value': ':.4f'}
             if 'PG.ProteinDescriptions' in df_res.columns:
                 hover_dict['PG.ProteinDescriptions'] = True
@@ -195,39 +286,37 @@ class ProteomicsDiscoveryPipeline:
         print("[OK] Exports saved to 'Output' folder with full metadata.\n")
 
 if __name__ == "__main__":
-#     # --- CONFIGURATION SWITCHBOARD ---
-#     # Toggle between your project and the colleague's data by commenting/uncommenting
-    
-#     # --- OPTION A: Colleague's Alpha/Beta Data ---
     experiment_config = {
+                # --- OPTION A: Colleague's Alpha/Beta Data ---
+    # experiment_config = {
+    #     'group_mapping': {
+    #         'Alpha': ['alpha_'],
+    #         'Beta':  ['beta_'],
+    #         'QC':    ['QC_']    
+    #     },
+    #     'comparisons': [('Alpha', 'Beta')],
+    #     'p_value_threshold': 0.05,    
+    #     'log2fc_threshold': 1.0       
+    # }
+    # data_file = 'Translated_Alpha_Beta_Data.csv'
+    
         'group_mapping': {
-            'Alpha': ['alpha_'], 
-            'Beta':  ['beta_'],
-            'QC':    ['QC_']    
+            'Treatment_C': ['HEX_C2', 'HEX_C3', 'HEX_C4', 'HEX_C5'],
+            'Treatment_N': ['HEX_N2', 'HEX_N3', 'HEX_N4', 'HEX_N5'],
+            'Baseline_Control': ['HEX_NES2', 'HEX_NES3', 'HEX_NES4', 'HEX_NES5']
         },
-        'comparisons': [('Alpha', 'Beta')],
+        'comparisons': [('Treatment_C', 'Baseline_Control'), ('Treatment_N', 'Baseline_Control'), ('Treatment_C', 'Treatment_N')],
         'p_value_threshold': 0.05,    
         'log2fc_threshold': 1.0       
     }
-    data_file = 'Translated_Alpha_Beta_Data.csv'
-
-# # --- OPTION B: Original AKAP11 Data ---
-#     experiment_config = {
-#         'group_mapping': {
-#             'Treatment_C': ['HEX_C2', 'HEX_C3', 'HEX_C4', 'HEX_C5'],
-#             'Treatment_N': ['HEX_N2', 'HEX_N3', 'HEX_N4', 'HEX_N5'],
-#             'Baseline_Control': ['HEX_NES2', 'HEX_NES3', 'HEX_NES4', 'HEX_NES5']
-#         },
-#         'comparisons': [('Treatment_C', 'Baseline_Control'), ('Treatment_N', 'Baseline_Control')],
-#         'p_value_threshold': 0.05,    
-#         'log2fc_threshold': 1.0       
-#     }
     
-#     data_file = '20260313_093105_Omar_AKAP11_ServiceAward_DIA_TT_20250701_Report_pivot for Bella (1).csv'
+    data_file = '20260313_093105_Omar_AKAP11_ServiceAward_DIA_TT_20250701_Report_pivot for Bella (1).csv'
     
-    # These must be aligned with the experiment_config above!
     pipeline = ProteomicsDiscoveryPipeline(data_file, experiment_config)
     pipeline.clean_and_format()
     pipeline.impute_and_normalize()
+    pipeline.run_qc_checkpoint()
     pipeline.run_statistics()
     pipeline.export_and_plot()
+
+    
